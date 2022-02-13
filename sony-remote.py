@@ -2,6 +2,7 @@
 
 from inspect import signature, isfunction
 from argparse import ArgumentParser, RawTextHelpFormatter
+from pathlib import Path
 import requests
 import json
 import sys
@@ -87,8 +88,8 @@ class SonyRemote:
 class ArgParser(ArgumentParser):
 	def __init__(self):
 		super().__init__(description='Sony TV Remote', formatter_class=RawTextHelpFormatter)
-		self.add_argument("--host", default="192.168.1.100", help="IP address of the TV")
-		self.add_argument("--psk", default='1234', help="Pre-Shared Key used for authentication")
+		self.add_argument("--host", nargs='?', const="192.168.1.100", help="IP address of the TV")
+		self.add_argument("--psk", nargs='?', const='1234', help="Pre-Shared Key used for authentication")
 		self.sub_parsers = self.add_subparsers(parser_class=ArgumentParser)
 
 	def add_command(self, command, func):
@@ -101,6 +102,25 @@ class ArgParser(ArgumentParser):
 				sub_parser.add_argument(param.name, nargs='?', default=param.default, type=type(param.default))
 				continue
 			sub_parser.add_argument(param.name, type=param.default)
+
+
+def cache_conf(ip, psk):
+	if sys.platform == "linux":
+		path = Path(f"{Path.home()}/.local/share/sony-remote/config")
+		path.touch()
+		with open(path, 'r+') as f:
+			try:
+				conf = json.loads(f.read())
+				if ip: conf['ip'] = ip
+				else: conf['ip']
+				if psk: conf['psk'] = psk
+				else: conf['psk']
+			except:
+				conf = {"ip":"","psk":""}
+			f.seek(0)
+			f.truncate(0)
+			f.write(json.dumps(conf))
+		return conf['ip'], conf['psk']
 
 if __name__ == "__main__":
 	argparser = ArgParser()
@@ -116,6 +136,9 @@ if __name__ == "__main__":
 
 	host = args.pop('host')
 	psk = args.pop('psk')
+	print(host, psk)
+	host, psk = cache_conf(host, psk)
+
 	remote = SonyRemote(host, psk, version="1.0")
 	command = getattr(remote, args.pop('func').__name__)
 	response = command(**args)
