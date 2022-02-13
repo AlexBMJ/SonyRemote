@@ -1,19 +1,19 @@
 #!/usr/bin/python3
 
-from inspect import signature
+from inspect import signature, isfunction
+from argparse import ArgumentParser, RawTextHelpFormatter
 import requests
 import json
-import argparse
 import sys
 
 class SonyRemote:
 	"""https://pro-bravia.sony.net/develop/integrate/rest-api/spec/index.html"""
-	def __init__(self, ip, password, version="1.0"):
-		self._ip = ip
+	def __init__(self, host, psk, version="1.0"):
+		self._ip = host
 		self._url = "sony"
 		self._base_data = {"id": 1, "version": version}
 		self._session = requests.Session()
-		self._session.headers = {"Content-Type":"application/json", "X-Auth-PSK": password}
+		self._session.headers = {"Content-Type":"application/json", "X-Auth-PSK": psk}
 
 	def _build_request(self, method, path, version=None, **kwargs):
 		base = self._base_data
@@ -79,43 +79,50 @@ class SonyRemote:
 		"""Get current status of all external input sources of the device."""
 		return self._build_request("getCurrentExternalInputsStatus", "avContent", version='1.1')
 
+	def check_power(self):
+		"""Provides the current power status of the device."""
+		return self._build_request("getPowerStatus", "system")
 
 
-class ArgParser:
+class ArgParser(ArgumentParser):
 	def __init__(self):
-		self.parser = argparse.ArgumentParser(description='Sony TV Remote')
-		self.sub_parser = None
+		super().__init__(description='Sony TV Remote', formatter_class=RawTextHelpFormatter)
+		self.add_argument("--host", default="192.168.1.100", help="IP address of the TV")
+		self.add_argument("--psk", default='1234', help="Pre-Shared Key used for authentication")
+		self.sub_parsers = self.add_subparsers(parser_class=ArgumentParser)
 
-	def command(self, commands):
-		self.parser.add_argument('command', type=str, choices=commands, help='Subcommand to run')
-		return self.parser.parse_args(sys.argv[1:2]).command
-
-	def sub_command(self, func):
-		self.sub_parser = argparse.ArgumentParser(description=func.__doc__, formatter_class=argparse.RawTextHelpFormatter)
-		for param in list(signature(func).parameters.values()):
+	def add_command(self, command, func):
+		sub_parser = self.sub_parsers.add_parser(command, description=func.__doc__, help=func.__doc__.split('\n')[0], formatter_class=RawTextHelpFormatter)
+		sub_parser.set_defaults(func=func)
+		params = list(signature(func).parameters.values())
+		if isfunction(func) and len(params) > 0 and params[0].name == 'self': params.pop(0)
+		for param in params:
 			if not isinstance(param.default, type):
-				self.sub_parser.add_argument(param.name, nargs='?', default=param.default, type=type(param.default))
+				sub_parser.add_argument(param.name, nargs='?', default=param.default, type=type(param.default))
 				continue
-			self.sub_parser.add_argument(param.name, type=param.default)
-		
-		args = self.sub_parser.parse_args(sys.argv[2:])
-		return dict(args._get_kwargs())
+			sub_parser.add_argument(param.name, type=param.default)
 
 if __name__ == "__main__":
-	remote = SonyRemote("192.168.115.144", "1234", version="1.0")
 	argparser = ArgParser()
 
-	cmd_list = filter(lambda n:not n.startswith('_'), dir(remote))
-	cmd_list = map(lambda c:c.replace('_','-'), cmd_list)
+	command_list = filter(lambda n:not n.startswith('_'), dir(SonyRemote))
+	for command in command_list:
+		argparser.add_command(command.replace('_','-'), getattr(SonyRemote, command))
+	
+	args = argparser.parse_args().__dict__
+	if 'func' not in args: 
+		argparser.print_help()
+		exit(1)
 
-	command = argparser.command(list(cmd_list))
-	action = getattr(remote, command.replace('-','_'))
-	args = argparser.sub_command(action)
-	response = action(**args)
+	host = args.pop('host')
+	psk = args.pop('psk')
+	remote = SonyRemote(host, psk, version="1.0")
+	command = getattr(remote, args.pop('func').__name__)
+	response = command(**args)
 
 	if 'error' in response:
 		print(f"{response['error'][1]} | {args}\n")
-		if response['error'][0] == 3: argparser.sub_parser.print_help()
+		if response['error'][0] == 3: argparser.print_help()
 		if response['error'][0] == 12: print("No Such Method (Check version)")
 		if response['error'][0] == 14: print("Unsupported Version")
 		exit(1)
@@ -125,7 +132,7 @@ if __name__ == "__main__":
 		if type(response['result'][0]) is list and len(response['result']) == 1:
 			results = response['result'][0]
 		for result in results:
-			print(json.dumps(result, indent=4).replace('{','').replace('}',''))
+			print(json.dumps(result, indent=2).replace('"','').replace('{','').replace('}',''))
 	
 	elif 'result' not in response:
 		print(response)
